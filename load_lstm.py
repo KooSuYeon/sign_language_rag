@@ -3,6 +3,7 @@ import mediapipe as mp
 from tensorflow.keras.models import load_model
 import numpy as np
 import time
+from PIL import ImageFont, ImageDraw, Image
 
 # MediaPipe 손 추적 초기화
 mp_hands = mp.solutions.hands
@@ -12,7 +13,7 @@ mp_drawing = mp.solutions.drawing_utils
 model = load_model("sign_language_lstm_model.h5")
 
 # 비디오 캡처
-cap = cv2.VideoCapture(1)
+cap = cv2.VideoCapture(0)
 if not cap.isOpened():
     print("웹캠을 열 수 없습니다.")
     exit()
@@ -72,6 +73,12 @@ predicted_word = None
 last_prediction_time = time.time()
 frame_buffer = []  # 90 프레임을 저장하는 버퍼
 
+# 한국어 글꼴 경로 (예: Windows에서는 'C:\\Windows\\Fonts\\malgun.ttf', Mac에서는 '/Library/Fonts/AppleGothic.ttf' 사용)
+font_path = "/Library/Fonts/AppleGothic.ttf"  # Mac에서 기본적으로 제공하는 한국어 글꼴 경로
+
+# 글꼴 크기 설정
+font = ImageFont.truetype(font_path, 32)
+
 with mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5) as hands:
     while cap.isOpened():
         ret, frame = cap.read()
@@ -112,10 +119,14 @@ with mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5) a
             for landmarks in results.multi_hand_landmarks:
                 mp_drawing.draw_landmarks(frame, landmarks, mp_hands.HAND_CONNECTIONS)
         
-        # 예측된 단어 화면에 표시
         if predicted_word:
-            cv2.putText(frame, f"Predicted: {predicted_word}", (10, 50),
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            # OpenCV 이미지를 PIL 이미지로 변환
+            pil_image = Image.fromarray(frame)
+            draw = ImageDraw.Draw(pil_image)
+            draw.text((10, 50), f"Predicted: {predicted_word}", font=font, fill=(0, 255, 0))
+
+            # PIL 이미지를 다시 OpenCV 이미지로 변환
+            frame = np.array(pil_image)
 
         # 결과 화면 출력
         cv2.imshow('Sign Language Recognition', frame)
