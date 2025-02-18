@@ -10,7 +10,7 @@ from tensorflow.keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Dropout, Conv2D, MaxPooling2D, Input, GlobalAveragePooling2D
+from tensorflow.keras.layers import Dense, LSTM, Flatten, Dropout, Conv2D, MaxPooling2D, Input, GlobalAveragePooling2D, BatchNormalization, Conv1D, MaxPooling1D, Bidirectional
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.utils import to_categorical
 
@@ -163,7 +163,6 @@ for filename, _ in mp4_list:
     filename_list.append(filename)
     keypoints_list.append(_)
 
-
 def match_and_get_titles_and_one_hot(npy_files_name, raw_data):
     y = []
     matched_rows = []
@@ -219,9 +218,6 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 y = one_hot_labels
 X = keypoints_list
 
-
-
-
 def extract_keypoints(frame_keypoints):
     """각 프레임의 랜드마크(dict)를 (126,) 형태의 numpy 배열로 변환"""
     keypoints = np.zeros((42, 3))  # 왼손(21) + 오른손(21) = 42개
@@ -247,9 +243,10 @@ X_padded = [pad_sequences(video, maxlen=MAX_FRAMES, dtype="float32", padding="po
 
 # 2️⃣ **각 비디오를 동일한 길이(MAX_FRAMES)로 패딩**
 X_padded = pad_sequences(X_array, maxlen=MAX_FRAMES, dtype="float32", padding="post", truncating="post")
+X_padded = X_padded / np.max(X_padded)  # 최댓값 기준 정규화
 
-# 3️⃣ **배치 형태를 CNN 입력 형식에 맞추기 (batch, frames, features, 1)**
-X_padded = np.expand_dims(X_padded, axis=-1)  # (10, 407, 126, 1)
+# # 3️⃣ **배치 형태를 CNN 입력 형식에 맞추기 (batch, frames, features, 1)**
+# X_padded = np.expand_dims(X_padded, axis=-1)  # (10, 407, 126, 1)
 
 print("Final X_padded.shape:", X_padded.shape)  # (10, 407, 126, 1)
 
@@ -268,28 +265,20 @@ if y_train.ndim == 1:  # y_train이 정수형 레이블인 경우
 
 # CNN 모델 정의
 model = Sequential([
-    Input(shape=(MAX_FRAMES, 126, 1)),  # 입력 크기 지정 (407 프레임, 126 특징, 1 채널)
-    Conv2D(32, kernel_size=(3, 3), activation='relu'),
-    MaxPooling2D(pool_size=(2, 2), padding="same"),  # padding="same" 추가
-    Dropout(0.25),
-    Conv2D(64, kernel_size=(3, 3), activation='relu'),
-    MaxPooling2D(pool_size=(2, 2), padding="same"),  # padding="same" 추가
-    
-    # GlobalAveragePooling2D 사용 (Flatten 대신)
-    GlobalAveragePooling2D(),  
-    
+    Input(shape=(MAX_FRAMES, 126)),  # (407, 126) 형태 입력
+    Bidirectional(LSTM(128, return_sequences=True)),  
+    Bidirectional(LSTM(64)),  
     Dense(128, activation='relu'),
     Dropout(0.5),
-    Dense(3577, activation='softmax')  # 클래스 개수 수정
+    Dense(3577, activation='softmax')
 ])
 
-# 모델 요약
+
+model.compile(optimizer=Adam(learning_rate=0.0001), loss='categorical_crossentropy', metrics=['accuracy'])
 model.summary()
 
-# 모델 컴파일
-model.compile(optimizer=Adam(), loss='categorical_crossentropy', metrics=['accuracy'])
-
 # 모델 훈련
-history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=900)
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=300)
 
-model.save("sign_language_model.h5")  # 전체 모델 저장
+# 모델 저장
+model.save("sign_language_lstm_model.h5")
