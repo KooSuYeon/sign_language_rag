@@ -1,137 +1,117 @@
-import cv2
 import mediapipe as mp
+import tensorflow as tf
 from tensorflow.keras.models import load_model
+import cv2
 import numpy as np
-import time
+import pandas as pd
 from PIL import ImageFont, ImageDraw, Image
 
-# MediaPipe 손 추적 초기화
-mp_hands = mp.solutions.hands
+raw_data = pd.read_csv("dataset.csv")
+actions = raw_data["Title"][:10].tolist()
+seq_length = 30
+
+model = tf.keras.models.load_model('models/model.h5')
+print(model.input_shape)
+
+
+MAX_NUM_HANDS = 2
+mp_hands=mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
 
-# 학습된 모델 로드 (모델 입력: (MAX_FRAMES, 126))
-model = load_model("sign_language_lstm_model.h5")
+hands=mp_hands.Hands(
+    max_num_hands=MAX_NUM_HANDS, 
+    min_detection_confidence=0.5, 
+    min_tracking_confidence=0.5 
+)
 
 # 비디오 캡처
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(1)
 if not cap.isOpened():
     print("웹캠을 열 수 없습니다.")
     exit()
 
-# 설정값
-FPS = 30  # 초당 프레임 수
-MAX_FRAMES = 90  # 3초(30fps 기준)
-NUM_FEATURES = 126  # 손 랜드마크 특징 수
 
-# 클래스 이름 목록
-titles = [
-    '반복,거듭,수시로,자꾸,자주,잦다,여러 번,연거푸', 
-    '똑같다,같다,동일하다', 
-    '걷어차다', 
-    '느끼다,느낌,뉘앙스', 
-    '문화재', 
-    '방심,부주의', 
-    '가난,곤궁,궁핍,빈곤', 
-    '가치', 
-    '장애인 기능 경진 대회', 
-    '의사소통'
-]
+seq = []
+action_seq = []
 
-def extract_keypoints_from_webcam(frame, hands):
-    """웹캠 프레임에서 손 랜드마크 좌표를 추출 (양손 데이터 처리 포함)"""
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    results = hands.process(frame_rgb)
-    
-    keypoints_list = []
-    
-    if results.multi_hand_landmarks:
-        for hand_landmarks in results.multi_hand_landmarks[:2]:  # 최대 2개 손 인식
-            keypoints = np.array([[lm.x, lm.y, lm.z] for lm in hand_landmarks.landmark], dtype=np.float32)
-            keypoints_list.append(keypoints.flatten())  # (63,)
-
-    # 손이 한 개만 감지되었을 경우, 더미 데이터 추가
-    while len(keypoints_list) < 2:
-        keypoints_list.append(np.zeros(63, dtype=np.float32))  # (63,)
-
-    # 두 손 데이터를 하나로 합치기 → (126,)
-    if keypoints_list:
-        return np.concatenate(keypoints_list, axis=0)  # (126,)
-    else:
-        return None  # 손이 없을 경우 None 반환
-
-def prepare_input(landmark_array):
-    """ 모델 입력 크기 (90, 126)로 맞추기 위해 패딩 적용 """
-    padded = np.zeros((MAX_FRAMES, NUM_FEATURES), dtype=np.float32)
-    seq_len = min(len(landmark_array), MAX_FRAMES)
-
-    padded[:seq_len, :] = landmark_array[:seq_len, :]
-    return np.expand_dims(padded, axis=0)  # (1, 90, 126) 형태로 변경 (배치 차원 추가)
-
-
-# 예측 결과 및 타이머 변수
-predicted_word = None
-last_prediction_time = time.time()
-frame_buffer = []  # 90 프레임을 저장하는 버퍼
-
-# 한국어 글꼴 경로 (예: Windows에서는 'C:\\Windows\\Fonts\\malgun.ttf', Mac에서는 '/Library/Fonts/AppleGothic.ttf' 사용)
-font_path = "/Library/Fonts/AppleGothic.ttf"  # Mac에서 기본적으로 제공하는 한국어 글꼴 경로
-
-# 글꼴 크기 설정
+font_path = "/Library/Fonts/AppleGothic.ttf"
 font = ImageFont.truetype(font_path, 32)
 
-with mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.5) as hands:
-    while cap.isOpened():
-        ret, frame = cap.read()
-        if not ret:
-            break
 
-        # 손 랜드마크 추출
-        landmark_array = extract_keypoints_from_webcam(frame, hands)
 
-        if landmark_array is not None:
-            # 90 프레임 유지
-            if len(frame_buffer) >= MAX_FRAMES:
-                frame_buffer.pop(0)
-            frame_buffer.append(landmark_array)
-            
-            # 3초마다 예측 수행
-            current_time = time.time()
-            if len(frame_buffer) == MAX_FRAMES and (current_time - last_prediction_time) >= 3:  # 3초 이상 차이
-                X_input = prepare_input(np.array(frame_buffer))
-                prediction = model.predict(X_input)
+while cap.isOpened():
+    ret, img = cap.read()
+    img0 = img.copy()
 
-                predicted_label = np.argmax(prediction, axis=1)[0]
-                predicted_word = titles[predicted_label]
-                print("예측된 수화 단어:", predicted_word)
+    img = cv2.flip(img, 1)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    result = hands.process(img)
+    img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
 
-                # 마지막 예측 시간 업데이트
-                last_prediction_time = current_time
-        else:
-            # 손이 감지되지 않으면 프레임 버퍼 초기화 & 예측 단어 삭제
-            frame_buffer.clear()
-            predicted_word = None
+    if result.multi_hand_landmarks is not None:
+        for res in result.multi_hand_landmarks:
+            joint = np.zeros((21, 3))
+            for j, lm in enumerate(res.landmark):
+                joint[j] = [lm.x, lm.y, lm.z]
 
-        # 손 랜드마크 시각화
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = hands.process(frame_rgb)
-        
-        if results.multi_hand_landmarks:
-            for landmarks in results.multi_hand_landmarks:
-                mp_drawing.draw_landmarks(frame, landmarks, mp_hands.HAND_CONNECTIONS)
-        
-        if predicted_word:
-            # OpenCV 이미지를 PIL 이미지로 변환
-            pil_image = Image.fromarray(frame)
-            draw = ImageDraw.Draw(pil_image)
-            draw.text((10, 50), f"Predicted: {predicted_word}", font=font, fill=(0, 255, 0))
+            # Compute angles between joints
+            v1 = joint[[0,1,2,3,0,5,6,7,0,9,10,11,0,13,14,15,0,17,18,19], :3] # Parent joint
+            v2 = joint[[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20], :3] # Child joint
+            v = v2 - v1 # [20, 3]
+            # Normalize v
+            v = v / np.linalg.norm(v, axis=1)[:, np.newaxis]
 
-            # PIL 이미지를 다시 OpenCV 이미지로 변환
-            frame = np.array(pil_image)
+            # Get angle using arcos of dot product
+            angle = np.arccos(np.einsum('nt,nt->n',
+                v[[0,1,2,4,5,6,8,9,10,12,13,14,16,17,18],:], 
+                v[[1,2,3,5,6,7,9,10,11,13,14,15,17,18,19],:])) # [15,]
 
-        # 결과 화면 출력
-        cv2.imshow('Sign Language Recognition', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            angle = np.degrees(angle) # Convert radian to degree
 
-cap.release()
-cv2.destroyAllWindows()
+            d = np.concatenate([joint.flatten(), angle])
+
+            seq.append(d)
+
+            mp_drawing.draw_landmarks(img, res, mp_hands.HAND_CONNECTIONS)
+
+            if len(seq) < seq_length:
+                continue
+
+            input_data = np.expand_dims(np.array(seq[-seq_length:], dtype=np.float32), axis=0)
+            print(input_data.shape) 
+
+
+            y_pred = model.predict(input_data).squeeze()
+
+            i_pred = int(np.argmax(y_pred))
+            conf = y_pred[i_pred]
+
+            if conf < 0.9:
+                continue
+
+            action = actions[i_pred]
+            action_seq.append(action)
+
+            if len(action_seq) < 3:
+                continue
+
+            this_action = '?'
+            if action_seq[-1] == action_seq[-2] == action_seq[-3]:
+                this_action = action
+
+            # OpenCV -> PIL 변환
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img)
+
+            # 좌표 계산 및 한글 출력
+            text_position = (int(res.landmark[0].x * img.shape[1]), int(res.landmark[0].y * img.shape[0] + 20))
+            draw.text(text_position, this_action, font=font, fill=(255, 255, 255))
+
+            # 다시 PIL -> OpenCV 변환
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    # out.write(img0)
+    # out2.write(img)
+    cv2.imshow('img', img)
+    if cv2.waitKey(1) == ord('q'):
+        break
